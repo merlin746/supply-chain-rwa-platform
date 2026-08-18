@@ -1,0 +1,20 @@
+ {
+   "name": "rwa-platform",
+   "version": "1.0.0",
+   "description": "面向供应链金融的 RWA 资产确权与流转平台 — 智能合约层",
+   "main": "index.js",
+   "scripts": {
+     "compile": "hardhat compile",
+     "test": "hardhat test",
+     "deploy:local": "hardhat run scripts/deploy.js --network localhost",
+     "node": "hardhat node"
+   },
+   "devDependencies": {
+     "@nomicfoundation/hardhat-toolbox": "^4.0.0",
+     "hardhat": "^2.22.0"
+   },
+   "dependencies": {
+     "@openzeppelin/contracts": "^5.0.0",
+     "dotenv": "^16.4.0"
+   }
+ }
