@@ -1,0 +1,46 @@
+server:
+  port: 8080
+  servlet:
+    context-path: /api
+
+spring:
+  application:
+    name: rwa-supply-chain
+  datasource:
+    url: jdbc:mysql://localhost:3306/rwa_supply_chain?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Taipei&useSSL=false&allowPublicKeyRetrieval=true
+    username: root
+    password: 123456  # 本地开发占位密码，请按实际 MySQL 配置修改，不要提交真实密码
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+mybatis-plus:
+  mapper-locations: classpath:/mapper/*.xml
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+
+web3:
+  rpc-url: http://127.0.0.1:8545
+  contract-address: "0x5FbDB2315678afecb367f032d93F642f64180aa3"
+  event-poll-ms: 10000
+  start-block: 0
+  # 未接入成员1的链节点前保持 false，业务以链下（OFFCHAIN）模式落库；
+  # 拿到节点 RPC 与合约地址后置为 true 并填写上方两项
+  enabled: true
+  # 链上交易失败时回退链下模式（演示容错；生产建议 false 让错误暴露）
+  tx-fallback-offchain: true
+  # 企业托管私钥（企业ID -> 私钥），平台代各企业签名发交易。
+  # 下面是 Hardhat 本地节点的公开演示私钥（账户#1~#5），仅可用于本地演示，
+  # 与 scripts/deploy.js 的 比亚迪/科达利/聚能永拓/长园特发/建设银行 一一对应；
+  # 接入成员1的真实节点后必须替换，且真实私钥不要提交到 Git。
+  keys:
+    1: '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d'
+    2: '0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a'
+    3: '0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6'
+    4: '0x47e179ec197488593b187f80a00eb0da91f1b9d0b13f8733639f19c30a34926a'
+    5: '0x8b3a350cf5c34c9194ca85829a2df0ec3153be0318b5e2d3348e872092edffba'
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
