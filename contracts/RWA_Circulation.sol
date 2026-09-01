@@ -1,63 +1,61 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.26;
 
 import "../interfaces/IAssetCore.sol";
-import "../interfaces/IAccessControl.sol";
 
 /**
  * @title RWA_Circulation
  * @author 成员2 - 金融业务逻辑与流转合约工程师
  * @dev 供应链应收账款RWA凭证无损拆分与多级流转合约
  *
- * 核心功能：
- * 1. 凭证无损拆分：将大额应收账款凭证拆分为多张小额凭证，金额守恒
- * 2. 多级流转：支持一级供应商→二级供应商→三级供应商的链式支付流转
- * 3. 拆分守恒校验：拆分后金额 + 剩余金额 == 原凭证金额
- * 4. 属性继承：新凭证继承原凭证的到期时间戳(Slot)与核心企业信用背书
+ * 与成员1 RWA_Core_Asset 接口完全对齐：
+ * - 价值转移使用 transferFrom(uint256,uint256,uint256)（ERC-3525标准）
+ * - 角色权限通过 assetCore.hasRole 查询（成员1合约已继承AccessControl）
+ * - 资产信息通过 assetCore.getAssetInfo 查询
  *
- * 依赖：成员1的IAssetCore（ERC-3525底层）、成员4的IAccessControl（权限控制）
+ * 核心功能：
+ * 1. splitAndTransfer: 凭证无损拆分，严格金额守恒（增量校验法）
+ * 2. batchSplitAndTransfer: 批量拆分（一对多支付）
+ * 3. 质押保护：已质押给Settlement合约的凭证不可再拆分/转让
+ * 4. 拆分溯源：记录父凭证与拆分层级，支持信用穿透查询
  */
 contract RWA_Circulation {
     // ========== 状态变量 ==========
 
-    /// @dev 成员1部署的核心资产合约地址
+    /// @dev 成员1部署的RWA核心资产合约
     IAssetCore public immutable assetCore;
 
-    /// @dev 成员4部署的权限控制合约地址
-    IAccessControl public immutable accessControl;
+    /// @dev 成员2部署的清算合约地址（用于质押状态检查）
+    address public immutable settlementContract;
 
-    /// @dev 合约管理员（用于升级参数等）
+    /// @dev 合约管理员
     address public admin;
 
-    // ========== 拆分记录结构体 ==========
+    // ========== 拆分记录 ==========
 
     struct SplitRecord {
-        uint256 originalTokenId;   // 原始凭证ID
-        uint256 fromTokenId;       // 拆分后剩余凭证ID（原Token保留剩余面值）
-        uint256 toTokenId;         // 新生成的子凭证ID
-        uint256 splitValue;        // 拆分出去的金额
-        uint256 remainingValue;    // 原凭证剩余金额
-        address splitter;          // 拆分操作人（原凭证持有者）
-        address recipient;         // 子凭证接收方
-        uint256 timestamp;         // 拆分时间戳
-        uint256 slot;              // 继承的到期日Slot
+        uint256 originalTokenId;
+        uint256 fromTokenId;
+        uint256 toTokenId;
+        uint256 splitValue;
+        uint256 remainingValue;
+        address splitter;
+        address recipient;
+        uint256 timestamp;
+        uint256 slot;
     }
 
-    /// @dev 拆分记录映射：splitRecordId => SplitRecord
     mapping(uint256 => SplitRecord) public splitRecords;
-
-    /// @dev 拆分记录自增ID
     uint256 public splitRecordCount;
 
-    /// @dev 凭证拆分溯源：tokenId => 父凭证tokenId（0表示原始开立凭证）
+    /// @dev tokenId => 父凭证tokenId（0表示原始开立凭证）
     mapping(uint256 => uint256) public parentOf;
 
-    /// @dev 凭证拆分层级：tokenId => 拆分深度（原始凭证为0）
+    /// @dev tokenId => 拆分深度（原始凭证为0）
     mapping(uint256 => uint256) public splitLevelOf;
 
     // ========== 事件 ==========
 
-    /// @dev 凭证拆分事件
     event AssetSplit(
         uint256 indexed recordId,
         uint256 indexed originalTokenId,
@@ -69,7 +67,6 @@ contract RWA_Circulation {
         uint256 slot
     );
 
-    /// @dev 凭证流转事件（多级供应商间支付）
     event AssetCirculated(
         uint256 indexed fromTokenId,
         uint256 indexed toTokenId,
@@ -88,7 +85,7 @@ contract RWA_Circulation {
 
     modifier onlySupplier() {
         require(
-            accessControl.hasRole(accessControl.SUPPLIER_ROLE(), msg.sender),
+            assetCore.hasRole(assetCore.SUPPLIER_ROLE(), msg.sender),
             "RWA_Circulation: caller is not a supplier"
         );
         _;
@@ -97,36 +94,42 @@ contract RWA_Circulation {
     // ========== 构造函数 ==========
 
     /**
-     * @param _assetCore 成员1部署的RWA核心资产合约地址
-     * @param _accessControl 成员4部署的权限控制合约地址
+     * @param _assetCore 成员1 RWA_Core_Asset 合约地址
+     * @param _settlementContract 成员2 RWA_Settlement 合约地址（用于质押保护检查）
      */
-    constructor(address _assetCore, address _accessControl) {
+    constructor(address _assetCore, address _settlementContract) {
         require(_assetCore != address(0), "RWA_Circulation: zero asset core address");
-        require(_accessControl != address(0), "RWA_Circulation: zero access control address");
+        require(_settlementContract != address(0), "RWA_Circulation: zero settlement address");
 
         assetCore = IAssetCore(_assetCore);
-        accessControl = IAccessControl(_accessControl);
+        settlementContract = _settlementContract;
         admin = msg.sender;
     }
 
     // ========== 核心业务函数 ==========
 
     /**
-     * @dev 凭证无损拆分与流转（核心函数）
-     * 基于ERC-3525的transferFromValue逻辑，将fromTokenId中的value面值
-     * 拆分转移到toTokenId，原凭证保留剩余面值，新凭证继承原凭证的Slot
-     * （到期日）与核心企业信用背书属性。
-     * 接收方自动取toTokenId的当前持有者，符合ERC-3525半同质化代币设计。
+     * @dev 凭证无损拆分与流转（核心函数，3参数符合任务要求）
+     * 将 fromTokenId 中的 value 面值拆分转移到 toTokenId。
+     * 接收方自动取 toTokenId 的当前持有者（ERC-3525设计）。
+     *
+     * 拆分守恒校验（增量法，修复审查问题#2）：
+     * - 转移前记录 toTokenId 余额 toBalanceBefore
+     * - 转移后记录 toTokenId 余额 toBalanceAfter
+     * - 严格校验 toBalanceAfter - toBalanceBefore == value
+     * - 同时校验 fromTokenId 减少量 == value
+     * - 不依赖 toTokenId 初始余额为0，批量拆分重复传同一 toTokenId 也能正确校验
+     *
+     * 质押保护（修复审查问题#3）：
+     * - 如果 fromTokenId 的持有者是 settlementContract，说明凭证已被质押托管，拒绝拆分
      *
      * @param fromTokenId 原始凭证ID（拆分方持有，拆分后保留剩余面值）
-     * @param toTokenId 目标凭证ID（接收方持有，需预先mint同Slot空凭证）
+     * @param toTokenId 目标凭证ID（接收方持有，需预先mint同Slot凭证）
      * @param value 要拆分转移的金额
      *
-     * 拆分守恒校验：
-     * - 拆分前原凭证余额 >= value
-     * - 拆分后原凭证余额 = 原余额 - value
-     * - 新凭证余额 = value
-     * - 严格验证：拆分后金额 + 剩余金额 == 原凭证金额
+     * 前置条件：调用者需先对 assetCore 授权价值：
+     *   assetCore.approve(fromTokenId, address(this), value)
+     *   或 assetCore.setApprovalForAll(address(this), true)
      */
     function splitAndTransfer(
         uint256 fromTokenId,
@@ -138,12 +141,19 @@ contract RWA_Circulation {
         require(fromTokenId != toTokenId, "RWA_Circulation: cannot split to same token");
 
         // 校验调用者是原凭证持有者（最优先权限校验）
+        address fromOwner = assetCore.ownerOf(fromTokenId);
         require(
-            assetCore.ownerOf(fromTokenId) == msg.sender,
+            fromOwner == msg.sender,
             "RWA_Circulation: caller is not the token owner"
         );
 
-        // 接收方自动取toTokenId的持有者（ERC-3525设计）
+        // 质押保护：凭证已被质押托管到Settlement合约则不可拆分（修复审查问题#3）
+        require(
+            fromOwner != settlementContract,
+            "RWA_Circulation: token is pledged and cannot be split"
+        );
+
+        // 接收方自动取 toTokenId 的持有者（ERC-3525设计）
         address recipient = assetCore.ownerOf(toTokenId);
         require(recipient != address(0), "RWA_Circulation: toTokenId has no owner");
         require(recipient != msg.sender, "RWA_Circulation: cannot split to self");
@@ -157,11 +167,11 @@ contract RWA_Circulation {
 
         // 校验接收方拥有供应商角色
         require(
-            accessControl.hasRole(accessControl.SUPPLIER_ROLE(), recipient),
+            assetCore.hasRole(assetCore.SUPPLIER_ROLE(), recipient),
             "RWA_Circulation: recipient is not a supplier"
         );
 
-        // ===== Slot一致性校验（属性继承） =====
+        // ===== Slot一致性校验（属性继承：新凭证继承原凭证到期日） =====
         uint256 fromSlot = assetCore.slotOf(fromTokenId);
         uint256 toSlot = assetCore.slotOf(toTokenId);
         require(
@@ -169,24 +179,35 @@ contract RWA_Circulation {
             "RWA_Circulation: slot mismatch - tokens must share same maturity"
         );
 
-        // ===== 执行ERC-3525价值转移（拆分守恒由底层保证） =====
-        // transferFromValue会自动从fromTokenId扣除value，增加到toTokenId
-        // 底层保证：balanceOf(fromTokenId) + balanceOf(toTokenId) 守恒
-        assetCore.transferFromValue(fromTokenId, toTokenId, value);
+        // ===== 守恒校验：记录转移前余额（增量法，修复审查问题#2） =====
+        uint256 fromBalanceBefore = assetCore.balanceOf(fromTokenId);
+        uint256 toBalanceBefore = assetCore.balanceOf(toTokenId);
 
-        // ===== 计算拆分后余额（守恒校验） =====
-        uint256 remainingValue = assetCore.balanceOf(fromTokenId);
-        uint256 transferredValue = assetCore.balanceOf(toTokenId);
+        // ===== 执行ERC-3525价值转移（成员1标准接口 transferFrom） =====
+        // 成员1合约内部保证：fromTokenId扣减value，toTokenId增加value，同Slot校验
+        assetCore.transferFrom(fromTokenId, toTokenId, value);
 
-        // 严格守恒校验：拆分后金额 + 剩余金额 == 原凭证金额
+        // ===== 守恒校验：转移后增量校验（严格保证拆分守恒） =====
+        uint256 fromBalanceAfter = assetCore.balanceOf(fromTokenId);
+        uint256 toBalanceAfter = assetCore.balanceOf(toTokenId);
+
+        // 校验1：fromTokenId 减少量 == value
         require(
-            remainingValue + transferredValue == originalBalance,
+            fromBalanceBefore - fromBalanceAfter == value,
+            "RWA_Circulation: from token decrement mismatch"
+        );
+        // 校验2：toTokenId 增加量 == value（不依赖初始余额为0，批量拆分安全）
+        require(
+            toBalanceAfter - toBalanceBefore == value,
+            "RWA_Circulation: to token increment mismatch"
+        );
+        // 校验3：总量守恒（原余额 == 剩余 + 增量）
+        require(
+            fromBalanceAfter + (toBalanceAfter - toBalanceBefore) == originalBalance,
             "RWA_Circulation: split conservation check failed"
         );
-        require(
-            transferredValue == value,
-            "RWA_Circulation: transferred value mismatch"
-        );
+
+        uint256 remainingValue = fromBalanceAfter;
 
         // ===== 记录拆分溯源 =====
         recordId = ++splitRecordCount;
@@ -233,7 +254,7 @@ contract RWA_Circulation {
     /**
      * @dev 批量拆分：将一张凭证拆分为多张子凭证（一对多支付场景）
      * @param fromTokenId 原始凭证ID
-     * @param toTokenIds 目标凭证ID数组（各目标凭证需预先mint同Slot空凭证）
+     * @param toTokenIds 目标凭证ID数组（各目标凭证需预先mint同Slot凭证）
      * @param values 对应拆分金额数组
      */
     function batchSplitAndTransfer(
@@ -273,11 +294,8 @@ contract RWA_Circulation {
 
     /**
      * @dev 查询凭证的完整拆分溯源链路（从原始凭证到当前凭证）
-     * @param tokenId 要查询的凭证ID
-     * @return lineage 溯源链路数组（从原始到当前）
      */
     function getSplitLineage(uint256 tokenId) external view returns (uint256[] memory lineage) {
-        // 计算链路深度
         uint256 depth = splitLevelOf[tokenId];
         lineage = new uint256[](depth + 1);
 
@@ -286,25 +304,18 @@ contract RWA_Circulation {
             lineage[i] = current;
             current = parentOf[current];
         }
-        lineage[0] = current; // 原始凭证
+        lineage[0] = current;
 
         return lineage;
     }
 
-    /**
-     * @dev 查询凭证是否为拆分生成的子凭证
-     */
     function isSplitChild(uint256 tokenId) external view returns (bool) {
         return parentOf[tokenId] != 0;
     }
 
-    /**
-     * @dev 查询某凭证的所有直接子凭证拆分记录
-     */
     function getSplitRecordsByToken(
         uint256 tokenId
     ) external view returns (SplitRecord[] memory records) {
-        // 先统计数量
         uint256 count;
         for (uint256 i = 1; i <= splitRecordCount; i++) {
             if (splitRecords[i].originalTokenId == tokenId) {
@@ -326,9 +337,6 @@ contract RWA_Circulation {
 
     // ========== 管理员函数 ==========
 
-    /**
-     * @dev 转移管理员权限
-     */
     function transferAdmin(address newAdmin) external onlyAdmin {
         require(newAdmin != address(0), "RWA_Circulation: zero admin address");
         admin = newAdmin;
