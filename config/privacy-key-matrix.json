@@ -2,23 +2,24 @@
   "algorithm": "AES-256-GCM",
   "keyVersion": 1,
   "rotationDays": 90,
+  "resourceId": "asset",
   "fields": [
     {
       "field": "purchaseUnitPrice",
       "ownerRole": "SUPPLIER_ROLE",
-      "readRoles": ["CORE_ENTERPRISE_ROLE", "SUPPLIER_ROLE", "BANK_ROLE"],
+      "readRoles": ["CORE_ENTERPRISE_ROLE", "SUPPLIER_ROLE", "FINANCIAL_INSTITUTION_ROLE"],
       "unauthorizedView": "range"
     },
     {
       "field": "contractDetails",
       "ownerRole": "CORE_ENTERPRISE_ROLE",
-      "readRoles": ["CORE_ENTERPRISE_ROLE", "BANK_ROLE"],
+      "readRoles": ["CORE_ENTERPRISE_ROLE", "FINANCIAL_INSTITUTION_ROLE"],
       "unauthorizedView": "hash"
     },
     {
       "field": "invoiceAttachment",
       "ownerRole": "SUPPLIER_ROLE",
-      "readRoles": ["CORE_ENTERPRISE_ROLE", "SUPPLIER_ROLE", "BANK_ROLE"],
+      "readRoles": ["CORE_ENTERPRISE_ROLE", "SUPPLIER_ROLE", "FINANCIAL_INSTITUTION_ROLE"],
       "unauthorizedView": "masked"
     }
   ],

@@ -36,12 +36,19 @@ contract PedersenCommitment {
         return commitment == commit(value, blinding);
     }
 
-    function storeCommitment(bytes32 assetId, uint256 value, uint256 blinding) external returns (uint256 commitment) {
+    /**
+     * @notice Store a precomputed commitment without exposing its opening.
+     * @dev The value and blinding factor must be computed and retained off-chain.
+     *      Do not add an overload that accepts either opening component: calldata
+     *      is public and would defeat the privacy property of this module.
+     */
+    function storeCommitment(bytes32 assetId, uint256 commitment) external returns (uint256) {
         require(assetId != bytes32(0), "Pedersen: asset id required");
         require(commitments[assetId] == 0, "Pedersen: commitment already exists");
-        commitment = commit(value, blinding);
+        require(commitment != 0 && commitment < MODULUS, "Pedersen: invalid commitment");
         commitments[assetId] = commitment;
         emit CommitmentStored(assetId, commitment);
+        return commitment;
     }
 
     function verifyStoredSplit(bytes32 parentAssetId, bytes32 child1AssetId, bytes32 child2AssetId)
@@ -55,9 +62,10 @@ contract PedersenCommitment {
     }
 
     /**
-     * @dev Verifies C_parent = C_child1 * C_child2 (mod p).
-     *      The caller must separately ensure the corresponding openings add:
-     *      v_parent=v1+v2 and r_parent=r1+r2.
+     * @dev Verifies only C_parent = C_child1 * C_child2 (mod p).
+     *      This proves a commitment relation, not that hidden openings satisfy
+     *      v_parent=v1+v2 and r_parent=r1+r2. A range proof or ZK proof is
+     *      required for that stronger claim and is intentionally out of scope.
      */
     function verifySplit(uint256 parentCommitment, uint256 child1Commitment, uint256 child2Commitment)
         public

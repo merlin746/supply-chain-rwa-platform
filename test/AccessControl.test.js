@@ -10,7 +10,7 @@ describe("AccessControl RBAC", function () {
     const field = ethers.id("purchase-price");
     const core = await acl.CORE_ENTERPRISE_ROLE();
     const sup = await acl.SUPPLIER_ROLE();
-    const bankRole = await acl.BANK_ROLE();
+    const bankRole = await acl.FINANCIAL_INSTITUTION_ROLE();
 
     await acl.grantRole(core, enterprise.address);
     await acl.grantRole(sup, supplier.address);
@@ -27,5 +27,6 @@ describe("AccessControl RBAC", function () {
     await expect(acl.connect(supplier).requireCanReadField(resource, field))
       .to.be.revertedWith("AccessControl: field read denied");
     expect(await acl.hasRole(await acl.ADMIN_ROLE(), admin.address)).to.equal(true);
+    expect(await acl.BANK_ROLE()).to.equal(bankRole);
   });
 });

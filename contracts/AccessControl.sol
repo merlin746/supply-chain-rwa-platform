@@ -13,7 +13,10 @@ contract AccessControl is OZAccessControl {
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 public constant CORE_ENTERPRISE_ROLE = keccak256("CORE_ENTERPRISE_ROLE");
     bytes32 public constant SUPPLIER_ROLE = keccak256("SUPPLIER_ROLE");
-    bytes32 public constant BANK_ROLE = keccak256("BANK_ROLE");
+    bytes32 public constant FINANCIAL_INSTITUTION_ROLE = keccak256("FINANCIAL_INSTITUTION_ROLE");
+    // Compatibility alias for clients that used the pre-release BANK_ROLE name.
+    // Both identifiers resolve to the canonical role value above.
+    bytes32 public constant BANK_ROLE = FINANCIAL_INSTITUTION_ROLE;
 
     mapping(bytes32 resourceId => mapping(bytes32 fieldId => mapping(bytes32 role => bool)))
         private _fieldRolePermissions;
@@ -26,7 +29,7 @@ contract AccessControl is OZAccessControl {
         _setRoleAdmin(ADMIN_ROLE, ADMIN_ROLE);
         _setRoleAdmin(CORE_ENTERPRISE_ROLE, ADMIN_ROLE);
         _setRoleAdmin(SUPPLIER_ROLE, ADMIN_ROLE);
-        _setRoleAdmin(BANK_ROLE, ADMIN_ROLE);
+        _setRoleAdmin(FINANCIAL_INSTITUTION_ROLE, ADMIN_ROLE);
     }
 
     function setFieldRolePermission(bytes32 resourceId, bytes32 fieldId, bytes32 role, bool allowed)
@@ -34,7 +37,7 @@ contract AccessControl is OZAccessControl {
         onlyRole(ADMIN_ROLE)
     {
         require(
-            role == ADMIN_ROLE || role == CORE_ENTERPRISE_ROLE || role == SUPPLIER_ROLE || role == BANK_ROLE,
+            role == ADMIN_ROLE || role == CORE_ENTERPRISE_ROLE || role == SUPPLIER_ROLE || role == FINANCIAL_INSTITUTION_ROLE,
             "AccessControl: unsupported role"
         );
         _fieldRolePermissions[resourceId][fieldId][role] = allowed;
@@ -46,7 +49,8 @@ contract AccessControl is OZAccessControl {
             || _fieldRolePermissions[resourceId][fieldId][ADMIN_ROLE] && hasRole(ADMIN_ROLE, account)
             || _fieldRolePermissions[resourceId][fieldId][CORE_ENTERPRISE_ROLE] && hasRole(CORE_ENTERPRISE_ROLE, account)
             || _fieldRolePermissions[resourceId][fieldId][SUPPLIER_ROLE] && hasRole(SUPPLIER_ROLE, account)
-            || _fieldRolePermissions[resourceId][fieldId][BANK_ROLE] && hasRole(BANK_ROLE, account);
+            || _fieldRolePermissions[resourceId][fieldId][FINANCIAL_INSTITUTION_ROLE]
+                && hasRole(FINANCIAL_INSTITUTION_ROLE, account);
     }
 
     function requireCanReadField(bytes32 resourceId, bytes32 fieldId) external view {

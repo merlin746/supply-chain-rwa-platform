@@ -132,6 +132,19 @@ cp .env.example .env
 
 ## 合约说明
 
+### 隐私矩阵执行
+
+`config/privacy-key-matrix.json` 不是仅供阅读的文档配置。运行
+`ACCESS_CONTROL_ADDRESS=0x... npm run privacy:apply`（Windows PowerShell 使用
+`$env:ACCESS_CONTROL_ADDRESS="0x..."; npm run privacy:apply`）会由部署账户读取矩阵，
+将 `resourceId` 和字段名哈希化，并调用 `AccessControl.setFieldRolePermission` 同步到链上。
+API 层在返回字段前必须调用同一合约的 `canReadField(resourceId, fieldId, account)`；
+链上权限只控制字段访问授权，AES 密钥仍由 KMS 分发，明文和 opening 不上链。
+
+Pedersen 模块的 `storeCommitment(assetId, commitment)` 只接受链下预计算的承诺值；
+`value` 与 `blinding` 由业务方保存在链下。当前 `verifySplit` 仅证明承诺值的乘法关系，
+不等价于证明隐藏金额和盲因子相加，接入生产环境前仍需范围证明或零知识证明，以及经过审计的目标曲线参数。
+
 `RWA_Core_Asset.sol` 是当前核心合约，主要能力包括：
 
 - `mintRWAAsset`：核心企业签发 RWA 资产凭证。
