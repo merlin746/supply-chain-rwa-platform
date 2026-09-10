@@ -121,14 +121,25 @@ mysql --default-character-set=utf8mb4 -uroot -p < database/rwa_supply_chain.sql
 mysql --default-character-set=utf8mb4 -uroot -p < database/seed_onchain.sql
 
 # 4. 把部署输出的合约地址填入 backend/src/main/resources/application.yml
-#    web3.contract-address，并设 web3.enabled: true，然后启动后端
+#    web3.contract-address，并设 web3.enabled: true
+
+# 5. 准备本地配置（演示私钥与本机数据库密码，不入库）
+cp backend/application-local.yml.example backend/application-local.yml
+# 按需修改 application-local.yml 中的 spring.datasource.password
+
+# 6. 启动后端（激活 local 配置）
+cd backend && java -jar target/rwa-supply-chain-1.0.0.jar --spring.profiles.active=local
 ```
 
-`application.yml` 中预置了 Hardhat 账户 #1~#5 的公开演示私钥（`web3.keys`），
-与 deploy.js 的角色分配一一对应，本地开箱即用；**接入真实节点时必须替换且不得提交真实私钥**。
+密钥管理约定：数据库密码经环境变量 `DB_PASSWORD` 注入（application.yml 默认值
+仅为占位符）；企业托管私钥只放在被 .gitignore 排除的 `application-local.yml`。
+`application-local.yml.example` 中的 Hardhat 账户 #1~#5 私钥是 hardhat node
+启动时打印的公开测试账户，仅用于本地演示；**真实私钥一律不入库不入仓**。
 
-注意：`settleAsset` 合约要求凭证已到期（`block.timestamp >= maturityDate`），
-演示凭证未到期时一键放款只落库清算（到期自动兑付属于成员2清算合约的职责）。
+状态机说明：放款（disburse）只划转资金，凭证保持质押（PLEDGED）；
+到期兑付走 `PUT /api/loan/{id}/settle`，要求凭证已到期，链上调用
+`settleAsset` 后凭证才进入 SETTLED——与合约状态机一致。
+演示兑付流程：开立一张几分钟到期的短期凭证，到期后点击银行端"到期兑付"。
 
 接口明细见 `docs/成员3接口与联调说明.md`，演示流程见 `docs/Demo演示脚本.md`。
 

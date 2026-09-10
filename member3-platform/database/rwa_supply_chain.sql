@@ -93,6 +93,7 @@ CREATE TABLE loan_application (
 CREATE TABLE blockchain_event (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
     tx_hash VARCHAR(128) NOT NULL,
+    log_index BIGINT COMMENT '交易内日志序号，与tx_hash联合去重（同交易可有多个同topic0事件）',
     block_number BIGINT,
     contract_address VARCHAR(128),
     topic0 VARCHAR(128),
@@ -100,7 +101,7 @@ CREATE TABLE blockchain_event (
     raw_topics JSON,
     raw_data LONGTEXT,
     synced_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE KEY uk_tx_topic(tx_hash, topic0)
+    UNIQUE KEY uk_tx_logindex(tx_hash, log_index)
 ) ENGINE=InnoDB;
 
 INSERT INTO enterprise(name, enterprise_code, enterprise_type, credit_limit, credit_used, wallet_address)

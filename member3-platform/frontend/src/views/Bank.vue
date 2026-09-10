@@ -1,6 +1,6 @@
 <script setup>
 import { onMounted, ref } from 'vue'
-import { getLoans, approveLoan, disburseLoan, rejectLoan, getChainStatus, verifyToken } from '../api'
+import { getLoans, approveLoan, disburseLoan, settleLoan, rejectLoan, getChainStatus, verifyToken } from '../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const loans = ref([])
@@ -11,10 +11,10 @@ const verifyLoading = ref(false)
 
 const fmtMoney = v => '¥' + Number(v || 0).toLocaleString('zh-CN')
 const loanStatusTag = s => ({
-  APPLIED: 'warning', APPROVED: 'primary', DISBURSED: 'success', REJECTED: 'danger'
+  APPLIED: 'warning', APPROVED: 'primary', DISBURSED: 'success', SETTLED: 'info', REJECTED: 'danger'
 }[s] || 'info')
 const loanStatusText = s => ({
-  APPLIED: '待审批', APPROVED: '已审批', DISBURSED: '已放款', REJECTED: '已驳回'
+  APPLIED: '待审批', APPROVED: '已审批', DISBURSED: '已放款', SETTLED: '已兑付', REJECTED: '已驳回'
 }[s] || s)
 
 async function load() {
@@ -30,10 +30,18 @@ async function approve(id) {
 }
 
 async function disburse(id) {
-  await ElMessageBox.confirm('确认向供应商放款？放款后凭证进入清算状态。', '一键放款', { type: 'warning' })
+  await ElMessageBox.confirm('确认向供应商放款？放款后凭证保持质押状态，到期后执行兑付清算。', '一键放款', { type: 'warning' })
   const res = await disburseLoan(id)
   if (!res.data.success) { ElMessage.error(res.data.message); return }
   ElMessage.success('放款成功')
+  await load()
+}
+
+async function settle(id) {
+  await ElMessageBox.confirm('确认凭证已到期，执行到期兑付？兑付后凭证清算（SETTLED），该操作不可撤销。', '到期兑付', { type: 'warning' })
+  const res = await settleLoan(id)
+  if (!res.data.success) { ElMessage.error(res.data.message); return }
+  ElMessage.success('到期兑付完成，凭证已清算')
   await load()
 }
 
@@ -93,11 +101,12 @@ onMounted(load)
           <el-tag :type="loanStatusTag(row.status)">{{ loanStatusText(row.status) }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="300">
+      <el-table-column label="操作" width="380">
         <template #default="{row}">
           <el-button size="small" @click="verify(row)">溯源核验</el-button>
           <el-button type="primary" size="small" :disabled="row.status!=='APPLIED'" @click="approve(row.id)">审批</el-button>
           <el-button type="success" size="small" :disabled="row.status!=='APPROVED'" @click="disburse(row.id)">一键放款</el-button>
+          <el-button type="warning" size="small" :disabled="row.status!=='DISBURSED'" @click="settle(row.id)">到期兑付</el-button>
           <el-button type="danger" size="small" :disabled="row.status!=='APPLIED'" @click="reject(row.id)">驳回</el-button>
         </template>
       </el-table-column>

@@ -8,8 +8,9 @@ spring:
     name: rwa-supply-chain
   datasource:
     url: jdbc:mysql://localhost:3306/rwa_supply_chain?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Taipei&useSSL=false&allowPublicKeyRetrieval=true
-    username: root
-    password: 123456  # 本地开发占位密码，请按实际 MySQL 配置修改，不要提交真实密码
+    username: ${DB_USER:root}
+    # 密码从环境变量读取，默认值为本地开发占位符；真实密码通过 DB_PASSWORD 注入，禁止提交
+    password: ${DB_PASSWORD:123456}
     driver-class-name: com.mysql.cj.jdbc.Driver
 
 mybatis-plus:
@@ -29,15 +30,10 @@ web3:
   # 链上交易失败时回退链下模式（演示容错；生产建议 false 让错误暴露）
   tx-fallback-offchain: true
   # 企业托管私钥（企业ID -> 私钥），平台代各企业签名发交易。
-  # 下面是 Hardhat 本地节点的公开演示私钥（账户#1~#5），仅可用于本地演示，
-  # 与 scripts/deploy.js 的 比亚迪/科达利/聚能永拓/长园特发/建设银行 一一对应；
-  # 接入成员1的真实节点后必须替换，且真实私钥不要提交到 Git。
-  keys:
-    1: '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d'
-    2: '0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a'
-    3: '0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6'
-    4: '0x47e179ec197488593b187f80a00eb0da91f1b9d0b13f8733639f19c30a34926a'
-    5: '0x8b3a350cf5c34c9194ca85829a2df0ec3153be0318b5e2d3348e872092edffba'
+  # 禁止在此文件中写任何私钥！本地 Hardhat 演示私钥放在 backend/application-local.yml
+  # （已被 .gitignore 排除），复制 application-local.yml.example 即可；
+  # 生产环境通过配置中心/密钥管理服务注入，真实私钥一律不入库不入仓。
+  keys: {}
 
 management:
   endpoints:

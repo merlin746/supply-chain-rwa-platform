@@ -7,6 +7,7 @@ import java.time.LocalDateTime;
 public class BlockchainEvent {
  @TableId(type=IdType.AUTO) private Long id;
  private String txHash;
+ private Long logIndex;
  private Long blockNumber;
  private String contractAddress;
  private String topic0;

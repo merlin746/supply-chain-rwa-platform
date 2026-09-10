@@ -88,10 +88,13 @@ public class EventSyncService {
 
         Long blockNumber = log.getBlockNumber() == null
                 ? null : log.getBlockNumber().longValue();
+        Long logIndex = log.getLogIndex() == null
+                ? null : log.getLogIndex().longValue();
 
+        // 去重键为 tx_hash + log_index：同一交易中可能存在多个同 topic0 事件（如批量拆分）
         LambdaQueryWrapper<BlockchainEvent> q = new LambdaQueryWrapper<>();
         q.eq(BlockchainEvent::getTxHash, txHash)
-         .eq(BlockchainEvent::getTopic0, topic0);
+         .eq(BlockchainEvent::getLogIndex, logIndex);
 
         if (eventMapper.selectCount(q) > 0) {
             return;
@@ -105,6 +108,7 @@ public class EventSyncService {
 
         BlockchainEvent event = new BlockchainEvent();
         event.setTxHash(txHash);
+        event.setLogIndex(logIndex);
         event.setBlockNumber(blockNumber);
         event.setContractAddress(log.getAddress());
         event.setTopic0(topic0);
@@ -177,15 +181,17 @@ public class EventSyncService {
     }
 
     /**
-     * AssetSplit(parentTokenId, childTokenId, value)，三个参数全部 indexed。
+     * AssetSplit(parentTokenId, childTokenId, value)。
+     * 注意成员1合约中只有 parentTokenId / childTokenId 是 indexed，
+     * value 位于 data word0（评审修复：此前误用 topics[3] 读取恒为 null）。
      * 后端自身发起的 split 已在业务事务内完成父凭证扣减与子凭证入库，
      * 因此只在子凭证不存在时才补缺。
      */
     private void onAssetSplit(Log evLog, String txHash) {
         String parentTokenId = indexedUint(evLog, 1);
         String childTokenId = indexedUint(evLog, 2);
-        String valueCents = indexedUint(evLog, 3);
-        if (parentTokenId == null || childTokenId == null || valueCents == null) {
+        BigInteger valueCentsBN = dataWord(evLog, 0);
+        if (parentTokenId == null || childTokenId == null || valueCentsBN == null) {
             return;
         }
         if (tokenExists(childTokenId)) {
@@ -196,7 +202,7 @@ public class EventSyncService {
         if (parent == null) {
             return;
         }
-        java.math.BigDecimal value = ChainTxService.toYuan(new BigInteger(valueCents));
+        java.math.BigDecimal value = ChainTxService.toYuan(valueCentsBN);
         parent.setValueAmount(parent.getValueAmount().subtract(value));
         tokenMapper.updateById(parent);
 

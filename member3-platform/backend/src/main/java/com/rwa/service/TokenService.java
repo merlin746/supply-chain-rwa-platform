@@ -35,6 +35,11 @@ import java.util.UUID;
  *   mint/split 通过 ChainTxService 调用成员1的 RWA_Core_Asset 合约，
  *   tokenId 与 txHash 均取自真实交易回执；链上失败时按
  *   web3.tx-fallback-offchain 决定是否回退链下。
+ *
+ * 一致性说明（已知限制）：链上模式为「先发交易、后写库」，若链上成功而
+ * 本地事务回滚，会出现链上已确权而库中缺记录的情况。此时由
+ * EventSyncService 的补缺机制（AssetCreated / AssetSplit 回填）兜底对账，
+ * 链上数据始终为准。如需更强保证，应引入 outbox 模式先落库后异步发交易。
  */
 @Service
 @RequiredArgsConstructor
@@ -45,6 +50,7 @@ public class TokenService {
     private final EnterpriseMapper enterpriseMapper;
     private final LoanApplicationMapper loanMapper;
     private final ChainTxService chainTx;
+    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
 
     @Value("${web3.contract-address:}")
     private String contractAddress;
@@ -385,9 +391,9 @@ public class TokenService {
     }
 
     private String nextChildTokenId(String parentTokenId) {
-        long count = tokenMapper.selectCount(
-                new QueryWrapper<RwaToken>().eq("parent_token_id", parentTokenId));
-        return parentTokenId + "-" + (count + 1);
+        // 用随机后缀而非 count+1，避免并发拆分生成重复 tokenId
+        return parentTokenId + "-"
+                + UUID.randomUUID().toString().replace("-", "").substring(0, 8).toUpperCase();
     }
 
     private String offchainTxHash() {
@@ -395,13 +401,17 @@ public class TokenService {
     }
 
     private String buildMetadata(Invoice invoice, Enterprise core, Enterprise supplier) {
-        return "{"
-                + "\"coreEnterprise\":\"" + core.getName() + "\","
-                + "\"supplier\":\"" + supplier.getName() + "\","
-                + "\"invoiceCode\":\"" + invoice.getInvoiceCode() + "\","
-                + "\"creditSignature\":\"OFFCHAIN-SIG-" + core.getEnterpriseCode() + "\","
-                + "\"mode\":\"OFFCHAIN_DB\""
-                + "}";
+        try {
+            Map<String, Object> metadata = new LinkedHashMap<>();
+            metadata.put("coreEnterprise", core.getName());
+            metadata.put("supplier", supplier.getName());
+            metadata.put("invoiceCode", invoice.getInvoiceCode());
+            metadata.put("creditSignature", "OFFCHAIN-SIG-" + core.getEnterpriseCode());
+            metadata.put("mode", "OFFCHAIN_DB");
+            return objectMapper.writeValueAsString(metadata);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new IllegalStateException("凭证元数据序列化失败", e);
+        }
     }
 
     private Map<String, Object> node(Enterprise e) {

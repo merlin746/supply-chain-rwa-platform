@@ -31,6 +31,7 @@ export const getLoans = params => api.get('/loan/list', { params })
 export const applyLoan = data => api.post('/loan/apply', data)
 export const approveLoan = id => api.put(`/loan/${id}/approve`)
 export const disburseLoan = id => api.put(`/loan/${id}/disburse`)
+export const settleLoan = id => api.put(`/loan/${id}/settle`)
 export const rejectLoan = id => api.put(`/loan/${id}/reject`)
 
 export default api
