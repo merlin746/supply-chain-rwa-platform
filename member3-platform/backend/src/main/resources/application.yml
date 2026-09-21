@@ -1,0 +1,42 @@
+server:
+  port: 8080
+  servlet:
+    context-path: /api
+
+spring:
+  application:
+    name: rwa-supply-chain
+  datasource:
+    url: jdbc:mysql://localhost:3306/rwa_supply_chain?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Taipei&useSSL=false&allowPublicKeyRetrieval=true
+    username: ${DB_USER:root}
+    # 密码从环境变量读取，默认值为本地开发占位符；真实密码通过 DB_PASSWORD 注入，禁止提交
+    password: ${DB_PASSWORD:123456}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+mybatis-plus:
+  mapper-locations: classpath:/mapper/*.xml
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+
+web3:
+  rpc-url: http://127.0.0.1:8545
+  contract-address: "0x5FbDB2315678afecb367f032d93F642f64180aa3"
+  event-poll-ms: 10000
+  start-block: 0
+  # 未接入成员1的链节点前保持 false，业务以链下（OFFCHAIN）模式落库；
+  # 拿到节点 RPC 与合约地址后置为 true 并填写上方两项
+  enabled: true
+  # 链上交易失败时回退链下模式（演示容错；生产建议 false 让错误暴露）
+  tx-fallback-offchain: true
+  # 企业托管私钥（企业ID -> 私钥），平台代各企业签名发交易。
+  # 禁止在此文件中写任何私钥！本地 Hardhat 演示私钥放在 backend/application-local.yml
+  # （已被 .gitignore 排除），复制 application-local.yml.example 即可；
+  # 生产环境通过配置中心/密钥管理服务注入，真实私钥一律不入库不入仓。
+  keys: {}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

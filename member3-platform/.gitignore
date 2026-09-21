@@ -1,0 +1,13 @@
+# 构建产物
+backend/target/
+frontend/dist/
+frontend/node_modules/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# 本地配置与敏感信息（请勿提交真实密码/私钥）
+.env
+application-local.yml
