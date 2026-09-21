@@ -1,0 +1,32 @@
+{
+  "algorithm": "AES-256-GCM",
+  "keyVersion": 1,
+  "rotationDays": 90,
+  "resourceId": "asset",
+  "fields": [
+    {
+      "field": "purchaseUnitPrice",
+      "ownerRole": "SUPPLIER_ROLE",
+      "readRoles": ["CORE_ENTERPRISE_ROLE", "SUPPLIER_ROLE", "FINANCIAL_INSTITUTION_ROLE"],
+      "unauthorizedView": "range"
+    },
+    {
+      "field": "contractDetails",
+      "ownerRole": "CORE_ENTERPRISE_ROLE",
+      "readRoles": ["CORE_ENTERPRISE_ROLE", "FINANCIAL_INSTITUTION_ROLE"],
+      "unauthorizedView": "hash"
+    },
+    {
+      "field": "invoiceAttachment",
+      "ownerRole": "SUPPLIER_ROLE",
+      "readRoles": ["CORE_ENTERPRISE_ROLE", "SUPPLIER_ROLE", "FINANCIAL_INSTITUTION_ROLE"],
+      "unauthorizedView": "masked"
+    }
+  ],
+  "keyLifecycle": {
+    "distribution": "KMS-wrapped per organization; never stored in plaintext on-chain",
+    "rotation": "Generate a new data key every 90 days or after an access revocation",
+    "revocation": "Disable the organization key and issue a new field key",
+    "audit": "Record keyVersion, requester, resourceId and timestamp for every unwrap"
+  }
+}
