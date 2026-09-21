@@ -11,7 +11,7 @@
 
 ## 推荐版本
 
-- JDK 24
+- JDK 21 或更高版本
 - Spring Boot 3.5.16
 - Maven 3.9.x
 - MyBatis-Plus 3.5.17
@@ -24,64 +24,46 @@
 - Vue Router 4.x
 - ECharts 6.x
 
-## 启动顺序
+## 零配置本地 Demo（推荐）
 
-### 1. 数据库
+该模式使用内存数据库并关闭链节点连接，不需要安装 MySQL、Docker 或启动 Hardhat。
+每次重启后端都会恢复演示种子数据。
 
-执行:
-`database/rwa_supply_chain.sql`
+终端 1：
 
-默认数据库:
-`rwa_supply_chain`
-
-默认连接:
-localhost:3306
-root / 123456
-
-### 2. 后端
-
-修改:
-`backend/src/main/resources/application.yml`
-
-重点修改:
-- MySQL 密码
-- `web3.rpc-url`
-- `web3.contract-address`
-
-然后：
 ```bash
 cd backend
-mvn clean package -DskipTests
-java -jar target/rwa-supply-chain-1.0.0.jar
+mvn clean package
+java -jar target/rwa-supply-chain-1.0.0.jar --spring.profiles.active=demo
 ```
 
-后端：
-http://localhost:8080
-
-健康检查：
-http://localhost:8080/api/health
-
-### 3. 前端
+终端 2：
 
 ```bash
 cd frontend
-npm install
+npm ci
 npm run dev
 ```
 
-前端：
-http://localhost:5173
+打开 http://localhost:5173 。后端健康检查为
+http://localhost:8080/api/health 。完整流程由后端集成测试覆盖，可用
+`cd backend && mvn test` 随时回归。
 
-### 4. Docker
+## Docker + MySQL Demo
+
+Docker 镜像会自行构建后端 JAR，无需预先运行 Maven：
 
 ```bash
 docker compose up --build
 ```
 
-前端：
-http://localhost:5173
-后端：
-http://localhost:8080
+旧版 Docker Compose 可使用 `docker-compose up --build`。启动后访问：
+
+- 前端：http://localhost:5173
+- 后端：http://localhost:8080/api/health
+
+如果手工使用本机 MySQL，则先执行 `database/rwa_supply_chain.sql`，再通过
+`DB_USER`、`DB_PASSWORD` 配置账号，并以默认 profile 启动后端。
 
 ## 演示账号
 
@@ -100,7 +82,7 @@ http://localhost:8080
 系统支持**链下/链上双模**（`web3.enabled` 开关），已对接成员1的
 [RWA_Core_Asset.sol](https://github.com/merlin746/supply-chain-rwa-platform)（ERC-3525）：
 
-- **链下存证模式**（`enabled: false`）：全流程落 MySQL，交易哈希以 `OFFCHAIN-` 占位，无需链节点即可演示。
+- **链下存证模式**（`enabled: false`）：全流程落数据库（Demo 为 H2，常规部署为 MySQL），交易哈希以 `OFFCHAIN-` 占位，无需链节点即可演示。
 - **链上模式**（`enabled: true`）：凭证开立走 `mintRWAAsset`、拆分走 `transferFrom(fromTokenId, to, value)`，
   tokenId 与 txHash 取自真实交易回执；银行核验接口追加链上余额/持有方交叉校验；
   事件同步服务每 10 秒解码 `AssetCreated/AssetSplit/AssetStatusChanged/AssetSettled/AssetRevoked` 回写业务库。
@@ -163,9 +145,9 @@ cd backend && java -jar target/rwa-supply-chain-1.0.0.jar --spring.profiles.acti
 
 EventSyncService 每 10 秒轮询 eth_getLogs：
 - AssetCreated
-- AssetBurned
-- TransferValue
-- FinancingApplied
+- AssetSplit / TransferValue
+- AssetStatusChanged
+- AssetRevoked
 - AssetSettled
 
 为了兼容成员1/2最终 ABI，事件同步采用：

@@ -1,0 +1,38 @@
+INSERT INTO enterprise(id, name, enterprise_code, enterprise_type, credit_limit, credit_used, wallet_address)
+VALUES
+(1, '比亚迪', 'BYD', 'CORE_ENTERPRISE', 1000000000, 0, '0xBYD00000000000000000000000000000000001'),
+(2, '科达利', 'KDL', 'SUPPLIER', 200000000, 0, '0xKDL00000000000000000000000000000000002'),
+(3, '聚能永拓', 'JNYT', 'SUPPLIER', 100000000, 0, '0xJNYT0000000000000000000000000000000003'),
+(4, '长园特发', 'CYTF', 'SUPPLIER', 100000000, 0, '0xCYTF0000000000000000000000000000000004'),
+(5, '建设银行', 'CCB', 'BANK', 5000000000, 0, '0xCCB0000000000000000000000000000000005');
+
+INSERT INTO sys_user(id, username, password, real_name, role, enterprise_id, wallet_address)
+VALUES
+(1, 'byd', '123456', '比亚迪管理员', 'CORE_ENTERPRISE', 1, '0xBYD00000000000000000000000000000000001'),
+(2, 'kdl', '123456', '科达利用户', 'SUPPLIER', 2, '0xKDL00000000000000000000000000000000002'),
+(3, 'jnyt', '123456', '聚能永拓用户', 'SUPPLIER', 3, '0xJNYT0000000000000000000000000000000003'),
+(4, 'cytf', '123456', '长园特发用户', 'SUPPLIER', 4, '0xCYTF0000000000000000000000000000000004'),
+(5, 'ccb', '123456', '建设银行用户', 'BANK', 5, '0xCCB0000000000000000000000000000000005');
+
+INSERT INTO invoice(id, invoice_code, invoice_number, core_enterprise_id, supplier_id, amount,
+                    issue_date, due_date, status, file_hash)
+VALUES
+(1, 'INV-DEMO-0001', 'NO-88001', 1, 2, 2000000.00,
+ CURRENT_DATE, DATEADD('DAY', 120, CURRENT_DATE), 'MINTED', 'OFFCHAIN-FILEHASH-0001'),
+(2, 'INV-DEMO-0002', 'NO-88002', 1, 3, 800000.00,
+ CURRENT_DATE, DATEADD('DAY', 240, CURRENT_DATE), 'PENDING', 'OFFCHAIN-FILEHASH-0002');
+
+INSERT INTO rwa_token(id, token_id, slot_id, parent_token_id, owner_address, enterprise_id, invoice_id,
+                      value_amount, due_timestamp, status, contract_address, tx_hash, metadata_json)
+VALUES
+(1, 'RWA-DEMO-ROOT-001', 'SLOT-DEMO-120D', NULL,
+ '0xKDL00000000000000000000000000000000002', 2, 1,
+ 2000000.00,
+ DATEDIFF('SECOND', TIMESTAMP '1970-01-01 00:00:00', DATEADD('DAY', 120, CURRENT_TIMESTAMP)),
+ 'UNCIRCULATED', '0x0000000000000000000000000000000000000000', 'OFFCHAIN-DEMO-MINT-0001',
+ '{"coreEnterprise":"比亚迪","supplier":"科达利","invoiceCode":"INV-DEMO-0001","mode":"OFFCHAIN_DB"}');
+
+ALTER TABLE enterprise ALTER COLUMN id RESTART WITH 100;
+ALTER TABLE sys_user ALTER COLUMN id RESTART WITH 100;
+ALTER TABLE invoice ALTER COLUMN id RESTART WITH 100;
+ALTER TABLE rwa_token ALTER COLUMN id RESTART WITH 100;

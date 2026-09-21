@@ -53,9 +53,9 @@
 | 智能合约 | Solidity ^0.8.26、ERC-3525、OpenZeppelin 5.x |
 | 开发框架 | Hardhat 2.x |
 | 区块链底座 | FISCO BCOS / Geth 私有链 |
-| 后端（规划） | Java 17 + Spring Boot 3.x + Web3j |
-| 前端（规划） | Vue 3 + Element Plus + AntV G6 |
-| 隐私密码学（规划） | Pedersen 承诺 + AES-256 + RBAC |
+| 后端 | Java 21 + Spring Boot 3.x + MyBatis-Plus + Web3j |
+| 前端 | Vue 3 + Element Plus + ECharts |
+| 隐私密码学 | Pedersen 承诺原型 + AES-256-GCM + RBAC |
 
 ## 目录结构
 
@@ -79,30 +79,53 @@
 
 ## 快速开始
 
-### 环境要求
+### 全栈业务 Demo（推荐）
+
+全栈 Demo 提供核心企业、供应商和银行三端 Portal，并内置无需 MySQL 或链节点的
+H2 演示配置。分别启动两个终端：
+
+```bash
+cd member3-platform/backend
+mvn clean package
+java -jar target/rwa-supply-chain-1.0.0.jar --spring.profiles.active=demo
+```
+
+```bash
+cd member3-platform/frontend
+npm ci
+npm run dev
+```
+
+随后访问 http://localhost:5173 ，演示账号密码均为 `123456`。完整说明见
+[全栈 Demo README](./member3-platform/README.md) 和
+[3–5 分钟演示脚本](./member3-platform/docs/Demo演示脚本.md)。
+
+### 智能合约开发
+
+#### 环境要求
 
 - Node.js 18 或更高版本
 - npm 或 pnpm
 
-### 安装依赖
+#### 安装依赖
 
 ```bash
 npm install
 ```
 
-### 编译合约
+#### 编译合约
 
 ```bash
 npm run compile
 ```
 
-### 运行测试
+#### 运行测试
 
 ```bash
 npm run test
 ```
 
-### 本地部署
+#### 本地部署
 
 方式一：使用 npm 脚本部署到本地节点。
 
@@ -122,7 +145,7 @@ npm run deploy:local
 powershell -ExecutionPolicy Bypass -File scripts/deploy_local.ps1
 ```
 
-### 配置环境变量
+#### 配置环境变量
 
 将 `.env.example` 复制为 `.env`，并按需填写私钥、RPC 地址和数据库信息。`.env` 已被 `.gitignore` 排除，请勿提交真实私钥。
 
@@ -141,7 +164,8 @@ cp .env.example .env
 API 层在返回字段前必须调用同一合约的 `canReadField(resourceId, fieldId, account)`；
 链上权限只控制字段访问授权，AES 密钥仍由 KMS 分发，明文和 opening 不上链。
 
-Pedersen 模块的 `storeCommitment(assetId, commitment)` 只接受链下预计算的承诺值；
+Pedersen 模块的 `storeCommitment(assetId, commitment)` 只允许 `COMMITTER_ROLE`
+调用，并只接受链下预计算的承诺值；
 `value` 与 `blinding` 由业务方保存在链下。当前 `verifySplit` 仅证明承诺值的乘法关系，
 不等价于证明隐藏金额和盲因子相加，接入生产环境前仍需范围证明或零知识证明，以及经过审计的目标曲线参数。
 

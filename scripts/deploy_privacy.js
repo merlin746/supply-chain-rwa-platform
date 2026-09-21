@@ -13,6 +13,9 @@ async function main() {
   await (await acl.grantRole(await acl.CORE_ENTERPRISE_ROLE(), enterprise.address)).wait();
   await (await acl.grantRole(await acl.SUPPLIER_ROLE(), supplier.address)).wait();
   await (await acl.grantRole(await acl.FINANCIAL_INSTITUTION_ROLE(), bank.address)).wait();
+  const committerRole = await pedersen.COMMITTER_ROLE();
+  await (await pedersen.grantRole(committerRole, enterprise.address)).wait();
+  await (await pedersen.grantRole(committerRole, supplier.address)).wait();
 
   console.log(JSON.stringify({
     network: hre.network.name,

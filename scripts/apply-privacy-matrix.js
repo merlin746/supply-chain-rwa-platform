@@ -21,7 +21,11 @@ async function main() {
   const matrix = JSON.parse(fs.readFileSync(matrixPath, "utf8"));
   const fields = matrix.fields || [];
   const [admin] = await hre.ethers.getSigners();
-  const acl = await hre.ethers.getContractAt("AccessControl", address, admin);
+  const acl = await hre.ethers.getContractAt(
+    "contracts/AccessControl.sol:AccessControl",
+    address,
+    admin,
+  );
   const roleIds = {};
   for (const roleName of ROLE_NAMES) {
     roleIds[roleName] = await acl[roleName]();

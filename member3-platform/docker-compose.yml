@@ -10,17 +10,24 @@ services:
     volumes:
       - ./database/rwa_supply_chain.sql:/docker-entrypoint-initdb.d/init.sql:ro
       - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p123456"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
   backend:
     build: ./backend
     container_name: rwa-backend
     depends_on:
-      - mysql
+      mysql:
+        condition: service_healthy
     environment:
       SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/rwa_supply_chain?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Taipei&useSSL=false&allowPublicKeyRetrieval=true
       SPRING_DATASOURCE_USERNAME: root
       SPRING_DATASOURCE_PASSWORD: 123456
       WEB3_RPC_URL: http://host.docker.internal:8545
+      WEB3_ENABLED: "false"
     ports:
       - "8080:8080"
 

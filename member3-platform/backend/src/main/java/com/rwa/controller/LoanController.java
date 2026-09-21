@@ -2,8 +2,10 @@ package com.rwa.controller;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.rwa.common.Result;
+import com.rwa.entity.Enterprise;
 import com.rwa.entity.LoanApplication;
 import com.rwa.entity.RwaToken;
+import com.rwa.mapper.EnterpriseMapper;
 import com.rwa.mapper.LoanApplicationMapper;
 import com.rwa.mapper.RwaTokenMapper;
 import lombok.RequiredArgsConstructor;
@@ -20,6 +22,7 @@ import java.util.UUID;
 public class LoanController {
     private final LoanApplicationMapper mapper;
     private final RwaTokenMapper tokenMapper;
+    private final EnterpriseMapper enterpriseMapper;
     private final com.rwa.service.ChainTxService chainTx;
 
     @GetMapping("/list")
@@ -31,12 +34,41 @@ public class LoanController {
     }
 
     @PostMapping("/apply")
+    @Transactional
     public Result<LoanApplication> apply(@RequestBody LoanApplication loan) {
+        if (loan.getTokenId() == null || loan.getTokenId().isBlank()) {
+            return Result.fail("质押凭证不能为空");
+        }
         RwaToken token = tokenMapper.selectOne(
                 new QueryWrapper<RwaToken>().eq("token_id", loan.getTokenId()));
         if (token == null) return Result.fail("质押凭证不存在：" + loan.getTokenId());
         if (!List.of("UNCIRCULATED", "CIRCULATING").contains(token.getStatus())) {
             return Result.fail("凭证当前状态不允许融资：" + token.getStatus());
+        }
+        if (loan.getAmount() == null || loan.getAmount().signum() <= 0) {
+            return Result.fail("融资金额必须大于 0");
+        }
+        if (token.getValueAmount() == null || loan.getAmount().compareTo(token.getValueAmount()) > 0) {
+            return Result.fail("融资金额不能超过凭证余额：" + token.getValueAmount());
+        }
+        if (loan.getSupplierId() == null || !loan.getSupplierId().equals(token.getEnterpriseId())) {
+            return Result.fail("申请企业必须是凭证当前持有方");
+        }
+
+        Enterprise supplier = enterpriseMapper.selectById(loan.getSupplierId());
+        if (supplier == null || !"SUPPLIER".equals(supplier.getEnterpriseType())) {
+            return Result.fail("申请企业不是有效供应商");
+        }
+        Enterprise bank = enterpriseMapper.selectById(loan.getBankId());
+        if (bank == null || !"BANK".equals(bank.getEnterpriseType())) {
+            return Result.fail("融资机构不是有效银行");
+        }
+
+        long activeLoans = mapper.selectCount(new QueryWrapper<LoanApplication>()
+                .eq("token_id", loan.getTokenId())
+                .in("status", "APPLIED", "APPROVED", "DISBURSED"));
+        if (activeLoans > 0) {
+            return Result.fail("该凭证已有进行中的融资申请");
         }
         loan.setApplicationNo("LA-" + UUID.randomUUID().toString().substring(0,8).toUpperCase());
         loan.setStatus("APPLIED");
@@ -54,15 +86,22 @@ public class LoanController {
         if (!"APPLIED".equals(loan.getStatus())) {
             return Result.fail("仅待审批（APPLIED）状态可审批，当前状态：" + loan.getStatus());
         }
-        loan.setStatus("APPROVED");
-        mapper.updateById(loan);
-
         RwaToken token = tokenMapper.selectOne(
                 new QueryWrapper<RwaToken>().eq("token_id", loan.getTokenId()));
-        if (token != null) {
-            token.setStatus("PLEDGED");
-            tokenMapper.updateById(token);
+        if (token == null) {
+            return Result.fail("质押凭证不存在：" + loan.getTokenId());
         }
+        if (!List.of("UNCIRCULATED", "CIRCULATING").contains(token.getStatus())) {
+            return Result.fail("凭证当前状态不允许质押：" + token.getStatus());
+        }
+        if (!loan.getSupplierId().equals(token.getEnterpriseId())) {
+            return Result.fail("凭证持有方已变化，请重新发起融资申请");
+        }
+
+        loan.setStatus("APPROVED");
+        mapper.updateById(loan);
+        token.setStatus("PLEDGED");
+        tokenMapper.updateById(token);
         return Result.ok("已审批，凭证进入质押状态", loan);
     }
 
@@ -76,6 +115,11 @@ public class LoanController {
         if (loan == null) return Result.fail("申请不存在");
         if (!"APPROVED".equals(loan.getStatus())) {
             return Result.fail("仅已审批（APPROVED）状态可放款，当前状态：" + loan.getStatus());
+        }
+        RwaToken token = tokenMapper.selectOne(
+                new QueryWrapper<RwaToken>().eq("token_id", loan.getTokenId()));
+        if (token == null || !"PLEDGED".equals(token.getStatus())) {
+            return Result.fail("凭证未处于质押状态，不能放款");
         }
         loan.setStatus("DISBURSED");
         mapper.updateById(loan);

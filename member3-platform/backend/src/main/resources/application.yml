@@ -26,7 +26,7 @@ web3:
   start-block: 0
   # 未接入成员1的链节点前保持 false，业务以链下（OFFCHAIN）模式落库；
   # 拿到节点 RPC 与合约地址后置为 true 并填写上方两项
-  enabled: true
+  enabled: false
   # 链上交易失败时回退链下模式（演示容错；生产建议 false 让错误暴露）
   tx-fallback-offchain: true
   # 企业托管私钥（企业ID -> 私钥），平台代各企业签名发交易。

@@ -44,4 +44,21 @@ describe("PedersenCommitment", function () {
     await expect(pedersen.storeCommitment(assetId, await pedersen.commit(42n, 9n)))
       .to.emit(pedersen, "CommitmentStored");
   });
+
+  it("allows only authorized committers to register asset commitments", async function () {
+    const [admin, committer, outsider] = await ethers.getSigners();
+    const Factory = await ethers.getContractFactory("PedersenCommitment");
+    const pedersen = await Factory.deploy();
+    const role = await pedersen.COMMITTER_ROLE();
+    const commitment = await pedersen.commit(42n, 9n);
+
+    await expect(
+      pedersen.connect(outsider).storeCommitment(ethers.id("blocked"), commitment),
+    ).to.be.revertedWithCustomError(pedersen, "AccessControlUnauthorizedAccount")
+      .withArgs(outsider.address, role);
+
+    await pedersen.connect(admin).grantRole(role, committer.address);
+    await expect(pedersen.connect(committer).storeCommitment(ethers.id("allowed"), commitment))
+      .to.emit(pedersen, "CommitmentStored");
+  });
 });

@@ -18,6 +18,8 @@ npm-debug.log*
 coverage/
 coverage.json
 typechain-types/
+reports/
+.demo/
 
 # IDE / OS files
 .idea/

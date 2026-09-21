@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import {AccessControl as OZAccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+
 /**
  * @title PedersenCommitment
  * @notice Prototype finite-field Pedersen commitments for confidential amounts.
@@ -8,11 +10,12 @@ pragma solidity ^0.8.26;
  *      curve/group. This contract keeps only commitments on-chain; openings
  *      (value, blinding) remain off-chain with the authorized business party.
  */
-contract PedersenCommitment {
+contract PedersenCommitment is OZAccessControl {
     // 2^255 - 19. The parameters are explicit and replaceable at deployment.
     uint256 public constant MODULUS = 57896044618658097711785492504343953926634992332820282019728792003956564819949;
     uint256 public constant GENERATOR_G = 5;
     uint256 public constant GENERATOR_H = 7;
+    bytes32 public constant COMMITTER_ROLE = keccak256("COMMITTER_ROLE");
 
     mapping(bytes32 assetId => uint256 commitment) public commitments;
 
@@ -23,6 +26,11 @@ contract PedersenCommitment {
     event CommitmentVerified(bytes32 indexed assetId, bool valid);
     event CommitmentStored(bytes32 indexed assetId, uint256 commitment);
     event SplitVerified(bytes32 indexed assetId, uint256 parentCommitment, uint256 child1Commitment, uint256 child2Commitment);
+
+    constructor() {
+        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _grantRole(COMMITTER_ROLE, msg.sender);
+    }
 
     function commit(uint256 value, uint256 blinding) public pure returns (uint256) {
         if (value >= MODULUS || blinding >= MODULUS) revert InvalidValue();
@@ -42,7 +50,11 @@ contract PedersenCommitment {
      *      Do not add an overload that accepts either opening component: calldata
      *      is public and would defeat the privacy property of this module.
      */
-    function storeCommitment(bytes32 assetId, uint256 commitment) external returns (uint256) {
+    function storeCommitment(bytes32 assetId, uint256 commitment)
+        external
+        onlyRole(COMMITTER_ROLE)
+        returns (uint256)
+    {
         require(assetId != bytes32(0), "Pedersen: asset id required");
         require(commitments[assetId] == 0, "Pedersen: commitment already exists");
         require(commitment != 0 && commitment < MODULUS, "Pedersen: invalid commitment");
