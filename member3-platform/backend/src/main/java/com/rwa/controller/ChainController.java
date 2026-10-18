@@ -13,7 +13,7 @@ import java.util.Map;
 public class ChainController {
     private final Web3Service web3Service;
 
-    @org.springframework.beans.factory.annotation.Value("${web3.enabled:true}")
+    @org.springframework.beans.factory.annotation.Value("${web3.enabled:false}")
     private boolean chainEnabled;
 
     @GetMapping("/status")
@@ -21,16 +21,18 @@ public class ChainController {
         Map<String,Object> m = new LinkedHashMap<>();
         m.put("mode", chainEnabled ? "ONCHAIN" : "OFFCHAIN");
         if (!chainEnabled) {
-            m.put("clientVersion", "链下模式（未接入成员1节点）");
+            m.put("clientVersion", "本地业务演示");
             m.put("contractExists", false);
-            m.put("verified", true);
+            m.put("verified", false);
+            m.put("note", "链下模式不代表链上真实性核验通过");
             return Result.ok(m);
         }
         try {
             m.put("clientVersion", web3Service.getClientVersion());
             m.put("blockNumber", web3Service.getBlockNumber());
-            m.put("contractExists", web3Service.contractExists());
-            m.put("verified", true);
+            boolean exists = web3Service.contractExists();
+            m.put("contractExists", exists);
+            m.put("verified", exists);
             return Result.ok(m);
         } catch (Exception e) {
             m.put("verified", false);

@@ -1,181 +1,88 @@
 package com.rwa.controller;
 
-import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.rwa.auth.AuthContext;
+import com.rwa.auth.AuthPrincipal;
 import com.rwa.common.Result;
-import com.rwa.entity.Enterprise;
 import com.rwa.entity.LoanApplication;
-import com.rwa.entity.RwaToken;
-import com.rwa.mapper.EnterpriseMapper;
-import com.rwa.mapper.LoanApplicationMapper;
-import com.rwa.mapper.RwaTokenMapper;
+import com.rwa.service.LoanService;
 import lombok.RequiredArgsConstructor;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
-import java.time.LocalDateTime;
 import java.util.List;
-import java.util.UUID;
 
 @RestController
 @RequestMapping("/loan")
 @RequiredArgsConstructor
 public class LoanController {
-    private final LoanApplicationMapper mapper;
-    private final RwaTokenMapper tokenMapper;
-    private final EnterpriseMapper enterpriseMapper;
-    private final com.rwa.service.ChainTxService chainTx;
+    private final LoanService loanService;
 
     @GetMapping("/list")
-    public Result<List<LoanApplication>> list(@RequestParam(required=false) String status) {
-        QueryWrapper<LoanApplication> q = new QueryWrapper<>();
-        if (status != null && !status.isBlank()) q.eq("status", status);
-        q.orderByDesc("id");
-        return Result.ok(mapper.selectList(q));
+    public Result<List<LoanApplication>> list(
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) Long supplierId,
+            @RequestParam(required = false) Long bankId) {
+        AuthPrincipal user = AuthContext.requireCurrent();
+        if ("SUPPLIER".equals(user.role())) {
+            supplierId = user.enterpriseId();
+            bankId = null;
+        } else if ("BANK".equals(user.role())) {
+            bankId = user.enterpriseId();
+        } else if (!"ADMIN".equals(user.role())) {
+            return Result.ok(List.of());
+        }
+        return Result.ok(loanService.list(status, supplierId, bankId));
     }
 
     @PostMapping("/apply")
-    @Transactional
-    public Result<LoanApplication> apply(@RequestBody LoanApplication loan) {
-        if (loan.getTokenId() == null || loan.getTokenId().isBlank()) {
-            return Result.fail("质押凭证不能为空");
+    public Result<LoanApplication> apply(@RequestBody LoanApplication request) {
+        try {
+            AuthPrincipal user = AuthContext.requireCurrent();
+            return Result.ok("融资申请已提交", loanService.apply(request, user.enterpriseId()));
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            return Result.fail(e.getMessage());
         }
-        RwaToken token = tokenMapper.selectOne(
-                new QueryWrapper<RwaToken>().eq("token_id", loan.getTokenId()));
-        if (token == null) return Result.fail("质押凭证不存在：" + loan.getTokenId());
-        if (!List.of("UNCIRCULATED", "CIRCULATING").contains(token.getStatus())) {
-            return Result.fail("凭证当前状态不允许融资：" + token.getStatus());
-        }
-        if (loan.getAmount() == null || loan.getAmount().signum() <= 0) {
-            return Result.fail("融资金额必须大于 0");
-        }
-        if (token.getValueAmount() == null || loan.getAmount().compareTo(token.getValueAmount()) > 0) {
-            return Result.fail("融资金额不能超过凭证余额：" + token.getValueAmount());
-        }
-        if (loan.getSupplierId() == null || !loan.getSupplierId().equals(token.getEnterpriseId())) {
-            return Result.fail("申请企业必须是凭证当前持有方");
-        }
-
-        Enterprise supplier = enterpriseMapper.selectById(loan.getSupplierId());
-        if (supplier == null || !"SUPPLIER".equals(supplier.getEnterpriseType())) {
-            return Result.fail("申请企业不是有效供应商");
-        }
-        Enterprise bank = enterpriseMapper.selectById(loan.getBankId());
-        if (bank == null || !"BANK".equals(bank.getEnterpriseType())) {
-            return Result.fail("融资机构不是有效银行");
-        }
-
-        long activeLoans = mapper.selectCount(new QueryWrapper<LoanApplication>()
-                .eq("token_id", loan.getTokenId())
-                .in("status", "APPLIED", "APPROVED", "DISBURSED"));
-        if (activeLoans > 0) {
-            return Result.fail("该凭证已有进行中的融资申请");
-        }
-        loan.setApplicationNo("LA-" + UUID.randomUUID().toString().substring(0,8).toUpperCase());
-        loan.setStatus("APPLIED");
-        loan.setCreatedAt(LocalDateTime.now());
-        mapper.insert(loan);
-        return Result.ok("融资申请已提交", loan);
     }
 
-    /** 银行审批通过：凭证进入质押状态（PLEDGED） */
     @PutMapping("/{id}/approve")
-    @Transactional
     public Result<?> approve(@PathVariable Long id) {
-        LoanApplication loan = mapper.selectById(id);
-        if (loan == null) return Result.fail("申请不存在");
-        if (!"APPLIED".equals(loan.getStatus())) {
-            return Result.fail("仅待审批（APPLIED）状态可审批，当前状态：" + loan.getStatus());
-        }
-        RwaToken token = tokenMapper.selectOne(
-                new QueryWrapper<RwaToken>().eq("token_id", loan.getTokenId()));
-        if (token == null) {
-            return Result.fail("质押凭证不存在：" + loan.getTokenId());
-        }
-        if (!List.of("UNCIRCULATED", "CIRCULATING").contains(token.getStatus())) {
-            return Result.fail("凭证当前状态不允许质押：" + token.getStatus());
-        }
-        if (!loan.getSupplierId().equals(token.getEnterpriseId())) {
-            return Result.fail("凭证持有方已变化，请重新发起融资申请");
-        }
-
-        loan.setStatus("APPROVED");
-        mapper.updateById(loan);
-        token.setStatus("PLEDGED");
-        tokenMapper.updateById(token);
-        return Result.ok("已审批，凭证进入质押状态", loan);
+        return bankOperation(id, "APPROVE");
     }
 
-    /** 银行一键放款：资金划转给供应商，凭证保持质押状态（PLEDGED）。
-     *  到期兑付（SETTLED）由 /loan/{id}/settle 在凭证到期后执行，
-     *  与链上状态机（Active -> Settled 需 block.timestamp >= maturityDate）保持一致。 */
     @PutMapping("/{id}/disburse")
-    @Transactional
     public Result<?> disburse(@PathVariable Long id) {
-        LoanApplication loan = mapper.selectById(id);
-        if (loan == null) return Result.fail("申请不存在");
-        if (!"APPROVED".equals(loan.getStatus())) {
-            return Result.fail("仅已审批（APPROVED）状态可放款，当前状态：" + loan.getStatus());
-        }
-        RwaToken token = tokenMapper.selectOne(
-                new QueryWrapper<RwaToken>().eq("token_id", loan.getTokenId()));
-        if (token == null || !"PLEDGED".equals(token.getStatus())) {
-            return Result.fail("凭证未处于质押状态，不能放款");
-        }
-        loan.setStatus("DISBURSED");
-        mapper.updateById(loan);
-        return Result.ok("放款成功，凭证保持质押状态，到期兑付后清算", loan);
+        return bankOperation(id, "DISBURSE");
     }
 
-    /** 到期兑付：凭证到期后由银行执行清算，链上调用 settleAsset，凭证置为 SETTLED。
-     *  链上模式下不做回退——兑付是资金终态操作，失败必须显式暴露。 */
     @PutMapping("/{id}/settle")
-    @Transactional
     public Result<?> settle(@PathVariable Long id) {
-        LoanApplication loan = mapper.selectById(id);
-        if (loan == null) return Result.fail("申请不存在");
-        if (!"DISBURSED".equals(loan.getStatus())) {
-            return Result.fail("仅已放款（DISBURSED）状态可执行到期兑付，当前状态：" + loan.getStatus());
-        }
-        RwaToken token = tokenMapper.selectOne(
-                new QueryWrapper<RwaToken>().eq("token_id", loan.getTokenId()));
-        if (token == null) return Result.fail("质押凭证不存在：" + loan.getTokenId());
-
-        boolean onChain = chainTx.chainReady(loan.getBankId())
-                && com.rwa.service.ChainTxService.isNumericTokenId(token.getTokenId());
-
-        if (onChain) {
-            // 链上模式：到期判断交给合约（require block.timestamp >= maturityDate），
-            // 后端不另用系统时钟校验，避免链上时间（如演示环境时间快进）与系统时间不一致
-            try {
-                loan.setChainTxHash(chainTx.settleOnChain(loan.getBankId(), token.getTokenId()));
-            } catch (Exception e) {
-                return Result.fail("链上清算失败：" + e.getMessage());
-            }
-        } else {
-            // 链下模式：合约约束不可用，由后端按系统时间兜底校验
-            if (token.getDueTimestamp() != null
-                    && token.getDueTimestamp() > System.currentTimeMillis() / 1000) {
-                return Result.fail("凭证未到期，到期时间戳：" + token.getDueTimestamp());
-            }
-        }
-
-        token.setStatus("SETTLED");
-        tokenMapper.updateById(token);
-        loan.setStatus("SETTLED");
-        mapper.updateById(loan);
-        return Result.ok("到期兑付完成，凭证已清算", loan);
+        return bankOperation(id, "SETTLE");
     }
 
-    /** 银行驳回申请 */
     @PutMapping("/{id}/reject")
     public Result<?> reject(@PathVariable Long id) {
-        LoanApplication loan = mapper.selectById(id);
-        if (loan == null) return Result.fail("申请不存在");
-        if (!"APPLIED".equals(loan.getStatus())) {
-            return Result.fail("仅待审批（APPLIED）状态可驳回，当前状态：" + loan.getStatus());
+        return bankOperation(id, "REJECT");
+    }
+
+    private Result<?> bankOperation(Long id, String operation) {
+        try {
+            Long bankId = AuthContext.requireCurrent().enterpriseId();
+            LoanApplication loan = switch (operation) {
+                case "APPROVE" -> loanService.approve(id, bankId);
+                case "DISBURSE" -> loanService.disburse(id, bankId);
+                case "SETTLE" -> loanService.settle(id, bankId);
+                case "REJECT" -> loanService.reject(id, bankId);
+                default -> throw new IllegalArgumentException("不支持的融资操作");
+            };
+            String message = switch (operation) {
+                case "APPROVE" -> "已审批，凭证进入质押状态";
+                case "DISBURSE" -> "放款成功，凭证保持质押状态，到期兑付后清算";
+                case "SETTLE" -> "到期兑付完成，凭证已清算";
+                case "REJECT" -> "已驳回";
+                default -> "操作成功";
+            };
+            return Result.ok(message, loan);
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            return Result.fail(e.getMessage());
         }
-        loan.setStatus("REJECTED");
-        mapper.updateById(loan);
-        return Result.ok("已驳回", loan);
     }
 }

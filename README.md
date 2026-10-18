@@ -96,7 +96,8 @@ npm ci
 npm run dev
 ```
 
-随后访问 http://localhost:5173 ，演示账号密码均为 `123456`。完整说明见
+随后访问 http://127.0.0.1:5178 ，演示账号密码均为 `123456`。前端固定使用 5178，
+如果端口已占用会明确报错。完整说明见
 [全栈 Demo README](./member3-platform/README.md) 和
 [3–5 分钟演示脚本](./member3-platform/docs/Demo演示脚本.md)。
 

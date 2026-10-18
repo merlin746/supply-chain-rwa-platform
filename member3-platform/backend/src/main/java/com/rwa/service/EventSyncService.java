@@ -3,14 +3,17 @@ package com.rwa.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.rwa.entity.BlockchainEvent;
+import com.rwa.entity.LoanApplication;
 import com.rwa.entity.RwaToken;
 import com.rwa.mapper.BlockchainEventMapper;
+import com.rwa.mapper.LoanApplicationMapper;
 import com.rwa.mapper.RwaTokenMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.web3j.protocol.core.methods.response.Log;
 
 import java.math.BigInteger;
@@ -39,6 +42,9 @@ public class EventSyncService {
     private final RwaTokenMapper tokenMapper;
     private final ChainTxService chainTx;
     private final com.rwa.mapper.EnterpriseMapper enterpriseMapper;
+    private final LoanApplicationMapper loanMapper;
+    private final CreditAccountingService creditAccountingService;
+    private final TransactionTemplate transactionTemplate;
 
     @Value("${web3.start-block:0}")
     private long configuredStartBlock;
@@ -73,7 +79,7 @@ public class EventSyncService {
 
             List<Log> logs = web3Service.getLogs(lastScanned, latest);
             for (Log log : logs) {
-                saveEvent(log);
+                processEvent(log);
             }
             lastScanned = latest.add(BigInteger.ONE);
         } catch (Exception e) {
@@ -82,14 +88,21 @@ public class EventSyncService {
         }
     }
 
+    /** Each event and its database projection commit atomically. */
+    public void processEvent(Log chainLog) {
+        transactionTemplate.executeWithoutResult(status -> saveEvent(chainLog));
+    }
+
     private void saveEvent(Log log) {
         String txHash = log.getTransactionHash();
+        if (txHash == null || txHash.isBlank() || log.getLogIndex() == null) {
+            throw new IllegalArgumentException("链上事件缺少交易哈希或日志序号");
+        }
         String topic0 = log.getTopics().isEmpty() ? "" : log.getTopics().get(0);
 
         Long blockNumber = log.getBlockNumber() == null
                 ? null : log.getBlockNumber().longValue();
-        Long logIndex = log.getLogIndex() == null
-                ? null : log.getLogIndex().longValue();
+        Long logIndex = log.getLogIndex().longValue();
 
         // 去重键为 tx_hash + log_index：同一交易中可能存在多个同 topic0 事件（如批量拆分）
         LambdaQueryWrapper<BlockchainEvent> q = new LambdaQueryWrapper<>();
@@ -116,7 +129,9 @@ public class EventSyncService {
         event.setRawTopics(topicsJson);
         event.setRawData(log.getData());
         event.setSyncedAt(LocalDateTime.now());
-        eventMapper.insert(event);
+        if (eventMapper.insert(event) != 1) {
+            throw new IllegalStateException("链上事件落库失败");
+        }
 
         switch (eventName) {
             case "AssetCreated" -> onAssetCreated(log, txHash, blockNumber);
@@ -152,6 +167,9 @@ public class EventSyncService {
         BigInteger faceValueCents = dataWord(evLog, 0);
         BigInteger maturity = dataWord(evLog, 1);
 
+        if (faceValueCents == null || faceValueCents.signum() <= 0 || maturity == null) {
+            throw new IllegalStateException("AssetCreated 事件数据不完整");
+        }
         RwaToken token = new RwaToken();
         token.setTokenId(tokenId);
         token.setSlotId(indexedUint(evLog, 3));
@@ -162,22 +180,23 @@ public class EventSyncService {
         token.setTxHash(txHash);
         token.setBlockNumber(blockNumber);
 
-        // 链上反查持有方 -> 映射企业（地址不区分大小写）
+        // 链上反查持有方失败时不提交事件，下一轮继续重试，避免永久留下不完整投影。
         try {
             String owner = chainTx.ownerOfOnChain(tokenId);
-            if (owner != null) {
-                token.setOwnerAddress(owner);
-                com.rwa.entity.Enterprise holder = enterpriseMapper.selectOne(
-                        new QueryWrapper<com.rwa.entity.Enterprise>()
-                                .apply("LOWER(wallet_address) = LOWER({0})", owner));
-                if (holder != null) {
-                    token.setEnterpriseId(holder.getId());
-                }
+            if (owner == null || owner.isBlank()) {
+                throw new IllegalStateException("ownerOf 未返回持有方");
             }
+            token.setOwnerAddress(owner);
+            com.rwa.entity.Enterprise holder = enterpriseMapper.selectOne(
+                    new QueryWrapper<com.rwa.entity.Enterprise>()
+                            .apply("LOWER(wallet_address) = LOWER({0})", owner));
+            if (holder != null) token.setEnterpriseId(holder.getId());
         } catch (Exception e) {
-            log.warn("反查 token {} 持有方失败：{}", tokenId, e.getMessage());
+            throw new IllegalStateException("反查 token " + tokenId + " 持有方失败", e);
         }
-        tokenMapper.insert(token);
+        if (tokenMapper.insert(token) != 1) {
+            throw new IllegalStateException("AssetCreated 凭证投影失败");
+        }
     }
 
     /**
@@ -197,14 +216,21 @@ public class EventSyncService {
         if (tokenExists(childTokenId)) {
             return; // 已由后端业务事务落库，跳过避免重复扣减
         }
-        RwaToken parent = tokenMapper.selectOne(
-                new QueryWrapper<RwaToken>().eq("token_id", parentTokenId));
+        RwaToken parent = tokenMapper.selectOne(new QueryWrapper<RwaToken>()
+                .eq("token_id", parentTokenId).last("FOR UPDATE"));
         if (parent == null) {
-            return;
+            throw new IllegalStateException("AssetSplit 的父凭证尚未同步：" + parentTokenId);
         }
         java.math.BigDecimal value = ChainTxService.toYuan(valueCentsBN);
+        if (value.signum() <= 0 || parent.getValueAmount() == null
+                || parent.getValueAmount().compareTo(value) < 0) {
+            throw new IllegalStateException("AssetSplit 金额超出父凭证余额");
+        }
         parent.setValueAmount(parent.getValueAmount().subtract(value));
-        tokenMapper.updateById(parent);
+        parent.setStatus("CIRCULATING");
+        if (tokenMapper.updateById(parent) != 1) {
+            throw new IllegalStateException("AssetSplit 父凭证投影失败");
+        }
 
         RwaToken child = new RwaToken();
         child.setTokenId(childTokenId);
@@ -219,19 +245,20 @@ public class EventSyncService {
         child.setMetadataJson(parent.getMetadataJson());
         try {
             String owner = chainTx.ownerOfOnChain(childTokenId);
-            if (owner != null) {
-                child.setOwnerAddress(owner);
-                com.rwa.entity.Enterprise holder = enterpriseMapper.selectOne(
-                        new QueryWrapper<com.rwa.entity.Enterprise>()
-                                .apply("LOWER(wallet_address) = LOWER({0})", owner));
-                if (holder != null) {
-                    child.setEnterpriseId(holder.getId());
-                }
+            if (owner == null || owner.isBlank()) {
+                throw new IllegalStateException("ownerOf 未返回持有方");
             }
+            child.setOwnerAddress(owner);
+            com.rwa.entity.Enterprise holder = enterpriseMapper.selectOne(
+                    new QueryWrapper<com.rwa.entity.Enterprise>()
+                            .apply("LOWER(wallet_address) = LOWER({0})", owner));
+            if (holder != null) child.setEnterpriseId(holder.getId());
         } catch (Exception e) {
-            log.warn("反查子凭证 {} 持有方失败：{}", childTokenId, e.getMessage());
+            throw new IllegalStateException("反查子凭证 " + childTokenId + " 持有方失败", e);
         }
-        tokenMapper.insert(child);
+        if (tokenMapper.insert(child) != 1) {
+            throw new IllegalStateException("AssetSplit 子凭证投影失败");
+        }
     }
 
     /**
@@ -251,6 +278,15 @@ public class EventSyncService {
             case 3 -> "SETTLED";
             default -> null; // Active 不覆盖业务状态（UNCIRCULATED/CIRCULATING/PLEDGED）
         };
+        if (newStatus.intValue() == 0) {
+            RwaToken token = tokenMapper.selectOne(new QueryWrapper<RwaToken>()
+                    .eq("token_id", tokenId).last("FOR UPDATE"));
+            if (token != null && "FROZEN".equals(token.getStatus())) {
+                boolean pledged = loanMapper.selectCount(new QueryWrapper<LoanApplication>()
+                        .eq("token_id", tokenId).in("status", "APPROVED", "DISBURSED")) > 0;
+                updateTokenStatus(tokenId, pledged ? "PLEDGED" : "CIRCULATING", null);
+            }
+        }
         if (mapped != null) {
             updateTokenStatus(tokenId, mapped, null);
         }
@@ -260,16 +296,45 @@ public class EventSyncService {
         if (tokenId == null) {
             return;
         }
-        RwaToken token = tokenMapper.selectOne(
-                new QueryWrapper<RwaToken>().eq("token_id", tokenId));
+        RwaToken token = tokenMapper.selectOne(new QueryWrapper<RwaToken>()
+                .eq("token_id", tokenId).last("FOR UPDATE"));
         if (token == null) {
-            return;
+            throw new IllegalStateException("状态事件对应的凭证尚未同步：" + tokenId);
         }
+        boolean firstSettlement = "SETTLED".equals(status) && !"SETTLED".equals(token.getStatus());
         token.setStatus(status);
         if (txHash != null) {
             token.setTxHash(txHash);
         }
-        tokenMapper.updateById(token);
+        if (tokenMapper.updateById(token) != 1) {
+            throw new IllegalStateException("链上凭证状态投影失败：" + tokenId);
+        }
+        if (firstSettlement) {
+            List<LoanApplication> disbursed = loanMapper.selectList(
+                    new QueryWrapper<LoanApplication>()
+                            .eq("token_id", tokenId).eq("status", "DISBURSED"));
+            for (LoanApplication loan : disbursed) {
+                loan.setStatus("SETTLED");
+                if (txHash != null) loan.setChainTxHash(txHash);
+                if (loanMapper.updateById(loan) != 1) {
+                    throw new IllegalStateException("链上清算对应的融资状态更新失败");
+                }
+            }
+            creditAccountingService.releaseForSettledToken(token);
+        }
+        if ("SETTLED".equals(status) && txHash != null) {
+            List<LoanApplication> settledLoans = loanMapper.selectList(
+                    new QueryWrapper<LoanApplication>()
+                            .eq("token_id", tokenId).eq("status", "SETTLED"));
+            for (LoanApplication loan : settledLoans) {
+                if (!txHash.equals(loan.getChainTxHash())) {
+                    loan.setChainTxHash(txHash);
+                    if (loanMapper.updateById(loan) != 1) {
+                        throw new IllegalStateException("链上清算交易哈希回写失败");
+                    }
+                }
+            }
+        }
     }
 
     private boolean tokenExists(String tokenId) {

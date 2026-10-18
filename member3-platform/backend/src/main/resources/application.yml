@@ -27,8 +27,8 @@ web3:
   # 未接入成员1的链节点前保持 false，业务以链下（OFFCHAIN）模式落库；
   # 拿到节点 RPC 与合约地址后置为 true 并填写上方两项
   enabled: false
-  # 链上交易失败时回退链下模式（演示容错；生产建议 false 让错误暴露）
-  tx-fallback-offchain: true
+  # 链上交易失败时明确返回错误，避免生成与链上不一致的链下凭证。
+  tx-fallback-offchain: false
   # 企业托管私钥（企业ID -> 私钥），平台代各企业签名发交易。
   # 禁止在此文件中写任何私钥！本地 Hardhat 演示私钥放在 backend/application-local.yml
   # （已被 .gitignore 排除），复制 application-local.yml.example 即可；

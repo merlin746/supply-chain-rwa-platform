@@ -5,4 +5,5 @@ import App from './App.vue'
 import router from './router'
 import './style.css'
 
-createApp(App).use(ElementPlus).use(router).mount('#app')
+const app = createApp(App).use(ElementPlus).use(router)
+router.isReady().then(() => app.mount('#app'))

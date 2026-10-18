@@ -37,7 +37,7 @@ services:
     depends_on:
       - backend
     ports:
-      - "5173:80"
+      - "5178:80"
 
 volumes:
   mysql_data:

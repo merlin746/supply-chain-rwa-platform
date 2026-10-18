@@ -25,6 +25,7 @@ import org.web3j.tx.RawTransactionManager;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.math.RoundingMode;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -42,6 +43,24 @@ import java.util.Optional;
 @Service
 @RequiredArgsConstructor
 public class ChainTxService {
+
+    public static final class ChainWriteException extends Exception {
+        private final boolean outcomeUncertain;
+
+        public ChainWriteException(String message, boolean outcomeUncertain) {
+            super(message);
+            this.outcomeUncertain = outcomeUncertain;
+        }
+
+        public ChainWriteException(String message, boolean outcomeUncertain, Throwable cause) {
+            super(message, cause);
+            this.outcomeUncertain = outcomeUncertain;
+        }
+
+        public boolean isOutcomeUncertain() {
+            return outcomeUncertain;
+        }
+    }
 
     /** 成员1合约事件签名（topic0 = keccak256(签名)） */
     public static final String SIG_ASSET_CREATED =
@@ -88,6 +107,10 @@ public class ChainTxService {
         return fallbackOffchain;
     }
 
+    public boolean isEnabled() {
+        return enabled;
+    }
+
     /** 链上模式是否就绪：开关打开 + 合约地址已配置 + 该企业已配置私钥 */
     public boolean chainReady(Long enterpriseId) {
         return chainReadyForRead()
@@ -103,7 +126,15 @@ public class ChainTxService {
 
     /** 元 -> 链上分 */
     public static BigInteger toCents(BigDecimal yuan) {
-        return yuan.multiply(CENTS_PER_YUAN).toBigInteger();
+        if (yuan == null || yuan.signum() < 0) {
+            throw new IllegalArgumentException("金额不能为空或为负数");
+        }
+        try {
+            return yuan.setScale(2, RoundingMode.UNNECESSARY)
+                    .multiply(CENTS_PER_YUAN).toBigIntegerExact();
+        } catch (ArithmeticException e) {
+            throw new IllegalArgumentException("金额最多保留两位小数", e);
+        }
     }
 
     /** 链上分 -> 元 */
@@ -113,6 +144,17 @@ public class ChainTxService {
 
     public static boolean isNumericTokenId(String tokenId) {
         return tokenId != null && tokenId.matches("\\d+");
+    }
+
+    public static boolean isOutcomeUncertain(Throwable failure) {
+        Throwable current = failure;
+        while (current != null) {
+            if (current instanceof ChainWriteException chainFailure) {
+                return chainFailure.isOutcomeUncertain();
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     // ═══════════════ 写操作（发交易） ═══════════════
@@ -133,7 +175,8 @@ public class ChainTxService {
 
         TransactionReceipt receipt = send(enterpriseKeys().get(coreEnterpriseId), function);
         String tokenId = extractIndexedUint(receipt, TOPIC_ASSET_CREATED, 1)
-                .orElseThrow(() -> new IllegalStateException("交易成功但未找到 AssetCreated 事件"));
+                .orElseThrow(() -> new ChainWriteException(
+                        "交易已成功但未找到 AssetCreated 事件，禁止回退链下以免重复确权", true));
         return new String[]{tokenId, receipt.getTransactionHash()};
     }
 
@@ -152,7 +195,8 @@ public class ChainTxService {
 
         TransactionReceipt receipt = send(enterpriseKeys().get(holderEnterpriseId), function);
         String childTokenId = extractIndexedUint(receipt, TOPIC_ASSET_SPLIT, 2)
-                .orElseThrow(() -> new IllegalStateException("交易成功但未找到 AssetSplit 事件"));
+                .orElseThrow(() -> new ChainWriteException(
+                        "交易已成功但未找到 AssetSplit 事件，禁止回退链下以免重复拆分", true));
         return new String[]{childTokenId, receipt.getTransactionHash()};
     }
 
@@ -238,19 +282,30 @@ public class ChainTxService {
         }
 
         String txHash = sent.getTransactionHash();
-        for (int i = 0; i < 60; i++) {
-            EthGetTransactionReceipt receiptResp = web3j.ethGetTransactionReceipt(txHash).send();
-            Optional<TransactionReceipt> receipt = receiptResp.getTransactionReceipt();
-            if (receipt.isPresent()) {
-                TransactionReceipt r = receipt.get();
-                if (!r.isStatusOK()) {
-                    throw new IllegalStateException("链上交易执行失败（revert），txHash=" + txHash);
-                }
-                return r;
-            }
-            Thread.sleep(500);
+        if (txHash == null || txHash.isBlank()) {
+            throw new IllegalStateException("节点未返回交易哈希");
         }
-        throw new IllegalStateException("等待交易回执超时，txHash=" + txHash);
+        try {
+            for (int i = 0; i < 60; i++) {
+                EthGetTransactionReceipt receiptResp = web3j.ethGetTransactionReceipt(txHash).send();
+                Optional<TransactionReceipt> receipt = receiptResp.getTransactionReceipt();
+                if (receipt.isPresent()) {
+                    TransactionReceipt r = receipt.get();
+                    if (!r.isStatusOK()) {
+                        throw new ChainWriteException(
+                                "链上交易执行失败（revert），txHash=" + txHash, false);
+                    }
+                    return r;
+                }
+                Thread.sleep(500);
+            }
+        } catch (ChainWriteException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ChainWriteException(
+                    "交易已广播但查询回执失败，txHash=" + txHash, true, e);
+        }
+        throw new ChainWriteException("交易已广播但等待回执超时，txHash=" + txHash, true);
     }
 
     /** 从回执日志中提取指定事件的第 index 个 indexed uint256 参数（topics[index]） */
